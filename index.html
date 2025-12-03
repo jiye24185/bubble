@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Floating Bubbles</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Arial', sans-serif;
+        }
+
+        canvas {
+            display: block;
+            cursor: none;
+        }
+
+        #cursor {
+            position: fixed;
+            width: 40px;
+            height: 40px;
+            border: 2px solid rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            transition: transform 0.15s ease;
+            z-index: 1000;
+        }
+
+        #cursor.active {
+            transform: translate(-50%, -50%) scale(0.8);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="bubbleCanvas"></canvas>
+    <div id="cursor"></div>
+
+    <script>
+        // ============================================
+        // 🎨 CONFIGURATION - Easy to tweak!
+        // ============================================
+        const CONFIG = {
+            // Bubble settings
+            bubbleCount: 20,
+            minSize: 30,
+            maxSize: 120,
+
+            // Motion settings
+            driftSpeed: 0.3,           // Base floating speed
+            friction: 0.98,            // Velocity dampening (0.95 = more friction, 0.99 = less)
+            bounceStrength: 8,         // How hard bubbles bounce from mouse
+            mouseRadius: 150,          // Distance at which mouse affects bubbles
+
+            // Animation settings
+            scaleOscillation: 0.02,    // How much bubbles "breathe"
+            scaleSpeed: 0.02,          // Speed of breathing animation
+
+            // Pop animation
+            popDuration: 600,          // Pop animation duration (ms)
+            popScaleMultiplier: 1.5,   // How much bubble grows when popping
+            particleCount: 8,          // Particles created on pop
+
+            // Color palette (random choice per bubble)
+            colors: [
+                { h: 0, s: 0, l: 95 },      // White
+                { h: 200, s: 80, l: 85 },   // Light blue
+                { h: 280, s: 70, l: 85 },   // Light purple
+                { h: 320, s: 75, l: 80 },   // Light pink
+                { h: 190, s: 60, l: 90 },   // Very light blue
+            ],
+
+            // Respawn settings
+            respawnDelay: 500          // Time before respawning after pop (ms)
+        };
+
+        // ============================================
+        // 🎯 Canvas Setup
+        // ============================================
+        const canvas = document.getElementById('bubbleCanvas');
+        const ctx = canvas.getContext('2d');
+        const cursorEl = document.getElementById('cursor');
+
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        });
+
+        // ============================================
+        // 🎈 Bubble Class
+        // Structure:
+        //   - Position: x, y
+        //   - Size: baseRadius (unchanging), radius (with breathing)
+        //   - Velocity: vx, vy
+        //   - Drift: driftAngle, driftSpeed (for wandering)
+        //   - Animation: scaleOffset (for breathing effect)
+        //   - State: popping, popProgress, particles
+        // ============================================
+        class Bubble {
+            constructor(x, y, radius) {
+                // Position
+                this.x = x || Math.random() * width;
+                this.y = y || Math.random() * height;
+
+                // Size
+                this.baseRadius = radius || (CONFIG.minSize + Math.random() * (CONFIG.maxSize - CONFIG.minSize));
+                this.radius = this.baseRadius;
+
+                // Velocity for floating motion
+                this.vx = (Math.random() - 0.5) * CONFIG.driftSpeed;
+                this.vy = (Math.random() - 0.5) * CONFIG.driftSpeed;
+
+                // Random drift offset (for gentle wandering)
+                this.driftAngle = Math.random() * Math.PI * 2;
+                this.driftSpeed = 0.001 + Math.random() * 0.002;
+
+                // Scale oscillation (breathing effect)
+                this.scaleOffset = Math.random() * Math.PI * 2;
+
+                // Color
+                const colorChoice = CONFIG.colors[Math.floor(Math.random() * CONFIG.colors.length)];
+                this.color = colorChoice;
+
+                // State
+                this.popping = false;
+                this.popProgress = 0;
+                this.particles = [];
+            }
+
+            // Apply gentle drift motion
+            drift() {
+                this.driftAngle += this.driftSpeed;
+                this.vx += Math.cos(this.driftAngle) * 0.01;
+                this.vy += Math.sin(this.driftAngle) * 0.01;
+            }
+
+            // ============================================
+            // Mouse Interaction Logic:
+            // 1. Calculate distance from bubble to mouse
+            // 2. If within mouseRadius + radius, apply repelling force
+            // 3. Force strength decreases with distance
+            // 4. Apply force in opposite direction of mouse
+            // ============================================
+            update(mouseX, mouseY, mouseDown) {
+                if (this.popping) {
+                    this.updatePop();
+                    return;
+                }
+
+                // Gentle drift
+                this.drift();
+
+                // Mouse interaction
+                const dx = mouseX - this.x;
+                const dy = mouseY - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                // Mouse force field - pushes bubbles away
+                if (distance < CONFIG.mouseRadius + this.radius) {
+                    const force = (CONFIG.mouseRadius + this.radius - distance) / CONFIG.mouseRadius;
+                    const angle = Math.atan2(dy, dx);
+
+                    // Push away from mouse (negative force)
+                    this.vx -= Math.cos(angle) * force * CONFIG.bounceStrength;
+                    this.vy -= Math.sin(angle) * force * CONFIG.bounceStrength;
+                }
+
+                // Apply velocity
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Friction - gradually slow down
+                this.vx *= CONFIG.friction;
+                this.vy *= CONFIG.friction;
+
+                // Boundary bouncing with soft reflection
+                if (this.x - this.radius < 0) {
+                    this.x = this.radius;
+                    this.vx *= -0.8;
+                } else if (this.x + this.radius > width) {
+                    this.x = width - this.radius;
+                    this.vx *= -0.8;
+                }
+
+                if (this.y - this.radius < 0) {
+                    this.y = this.radius;
+                    this.vy *= -0.8;
+                } else if (this.y + this.radius > height) {
+                    this.y = height - this.radius;
+                    this.vy *= -0.8;
+                }
+
+                // Breathing animation (subtle scale change)
+                this.scaleOffset += CONFIG.scaleSpeed;
+                const scaleVariation = Math.sin(this.scaleOffset) * CONFIG.scaleOscillation;
+                this.radius = this.baseRadius * (1 + scaleVariation);
+            }
+
+            // ============================================
+            // Pop Animation:
+            // 1. Set popping flag and create particles
+            // 2. Particles shoot out in all directions
+            // 3. Bubble scales up and fades out
+            // 4. Particles fade and slow down
+            // ============================================
+            pop() {
+                if (this.popping) return;
+                this.popping = true;
+                this.popProgress = 0;
+
+                // Create particles in a circle
+                for (let i = 0; i < CONFIG.particleCount; i++) {
+                    const angle = (Math.PI * 2 * i) / CONFIG.particleCount;
+                    this.particles.push({
+                        x: this.x,
+                        y: this.y,
+                        vx: Math.cos(angle) * (2 + Math.random() * 2),
+                        vy: Math.sin(angle) * (2 + Math.random() * 2),
+                        radius: this.baseRadius * 0.15,
+                        life: 1
+                    });
+                }
+            }
+
+            // Update pop animation state
+            updatePop() {
+                this.popProgress += 16.67 / CONFIG.popDuration; // Assuming ~60fps
+
+                // Update particles
+                this.particles.forEach(p => {
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.vx *= 0.95;
+                    p.vy *= 0.95;
+                    p.life = 1 - this.popProgress;
+                });
+
+                if (this.popProgress >= 1) {
+                    this.popping = false;
+                    this.popProgress = 0;
+                    this.particles = [];
+                    return true; // Signal completion
+                }
+                return false;
+            }
+
+            // ============================================
+            // Visual Customization:
+            // - Gradient creates 3D sphere effect
+            // - Highlight adds glossy shine
+            // - Rim adds definition
+            // Modify colors and positions here!
+            // ============================================
+            draw() {
+                if (this.popping) {
+                    this.drawPop();
+                    return;
+                }
+
+                const { h, s, l } = this.color;
+
+                // Create radial gradient for 3D effect
+                const gradient = ctx.createRadialGradient(
+                    this.x - this.radius * 0.3,
+                    this.y - this.radius * 0.3,
+                    this.radius * 0.1,
+                    this.x,
+                    this.y,
+                    this.radius
+                );
+
+                gradient.addColorStop(0, `hsla(${h}, ${s}%, ${Math.min(l + 10, 100)}%, 0.9)`);
+                gradient.addColorStop(0.4, `hsla(${h}, ${s}%, ${l}%, 0.7)`);
+                gradient.addColorStop(1, `hsla(${h}, ${s}%, ${l - 10}%, 0.5)`);
+
+                // Draw bubble
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+
+                // Shine/highlight
+                const highlightGradient = ctx.createRadialGradient(
+                    this.x - this.radius * 0.4,
+                    this.y - this.radius * 0.4,
+                    0,
+                    this.x - this.radius * 0.4,
+                    this.y - this.radius * 0.4,
+                    this.radius * 0.5
+                );
+                highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
+                highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+                ctx.beginPath();
+                ctx.arc(this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.4, 0, Math.PI * 2);
+                ctx.fillStyle = highlightGradient;
+                ctx.fill();
+
+                // Subtle rim
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `hsla(${h}, ${s}%, ${l}%, 0.4)`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Draw pop animation
+            drawPop() {
+                const progress = this.popProgress;
+                const scale = 1 + (CONFIG.popScaleMultiplier - 1) * progress;
+                const alpha = 1 - progress;
+                const currentRadius = this.baseRadius * scale;
+
+                const { h, s, l } = this.color;
+
+                // Draw expanding bubble
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, currentRadius, 0, Math.PI * 2);
+                ctx.fillStyle = `hsla(${h}, ${s}%, ${l}%, ${alpha * 0.5})`;
+                ctx.fill();
+
+                // Draw particles
+                this.particles.forEach(p => {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius * p.life, 0, Math.PI * 2);
+                    ctx.fillStyle = `hsla(${h}, ${s}%, ${l}%, ${p.life * 0.8})`;
+                    ctx.fill();
+                });
+            }
+
+            // Check if point is inside bubble
+            contains(x, y) {
+                const dx = x - this.x;
+                const dy = y - this.y;
+                return Math.sqrt(dx * dx + dy * dy) < this.radius;
+            }
+        }
+
+        // ============================================
+        // 🎮 Game State
+        // ============================================
+        let bubbles = [];
+        let mouse = { x: -1000, y: -1000, down: false };
+        let toRespawn = [];
+
+        // Initialize bubbles
+        function initBubbles() {
+            bubbles = [];
+            for (let i = 0; i < CONFIG.bubbleCount; i++) {
+                bubbles.push(new Bubble());
+            }
+        }
+
+        // ============================================
+        // 🖱️ Mouse/Touch Events
+        // ============================================
+        function updateMousePosition(e) {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+
+            // Update custom cursor
+            cursorEl.style.left = e.clientX + 'px';
+            cursorEl.style.top = e.clientY + 'px';
+        }
+
+        canvas.addEventListener('mousemove', updateMousePosition);
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            updateMousePosition(touch);
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            mouse.down = true;
+            cursorEl.classList.add('active');
+            handleClick(e);
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            mouse.down = false;
+            cursorEl.classList.remove('active');
+        });
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            mouse.down = true;
+            const touch = e.touches[0];
+            updateMousePosition(touch);
+            handleClick(touch);
+        });
+
+        canvas.addEventListener('touchend', () => {
+            mouse.down = false;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            mouse.x = -1000;
+            mouse.y = -1000;
+        });
+
+        // ============================================
+        // 💥 Click Handler
+        // ============================================
+        function handleClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            // Find clicked bubble (check from top to bottom)
+            for (let i = bubbles.length - 1; i >= 0; i--) {
+                const bubble = bubbles[i];
+                if (!bubble.popping && bubble.contains(clickX, clickY)) {
+                    bubble.pop();
+
+                    // Schedule respawn
+                    setTimeout(() => {
+                        toRespawn.push(i);
+                    }, CONFIG.respawnDelay);
+
+                    break; // Only pop one bubble per click
+                }
+            }
+        }
+
+        // ============================================
+        // 🎬 Animation Loop
+        // Uses requestAnimationFrame for smooth 60fps animation
+        // ============================================
+        function animate() {
+            // Clear canvas
+            ctx.clearRect(0, 0, width, height);
+
+            // Update and draw all bubbles
+            bubbles.forEach((bubble, index) => {
+                bubble.update(mouse.x, mouse.y, mouse.down);
+                bubble.draw();
+
+                // Check if pop animation is complete
+                if (bubble.popping && bubble.popProgress >= 1) {
+                    // Reset bubble to new position
+                    const newBubble = new Bubble();
+                    bubbles[index] = newBubble;
+                }
+            });
+
+            // Respawn bubbles
+            while (toRespawn.length > 0) {
+                const index = toRespawn.pop();
+                if (bubbles[index] && bubbles[index].popping) {
+                    // Still popping, wait more
+                    toRespawn.push(index);
+                    break;
+                }
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        // ============================================
+        // 🚀 Start
+        // ============================================
+        initBubbles();
+        animate();
+
+        // ============================================
+        // 📝 Debug info
+        // ============================================
+        console.log('%c🎈 Interactive Bubbles Loaded!', 'color: #667eea; font-size: 16px; font-weight: bold;');
+        console.log('Config:', CONFIG);
+        console.log('Click bubbles to pop them!');
+    </script>
+</body>
+</html>
