@@ -13,39 +13,12 @@
 
         body {
             overflow: hidden;
-            background: #ffffff;
+            background: linear-gradient(180deg, #87CEEB 0%, #E0F6FF 100%);
             font-family: 'Arial', sans-serif;
         }
 
         canvas {
             display: block;
-        }
-
-        /* Film grain overlay */
-        #grain {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 999;
-            opacity: 0.08;
-            background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="3.5" numOctaves="4" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(%23noiseFilter)"/></svg>');
-            animation: grain 0.5s steps(10) infinite;
-        }
-
-        @keyframes grain {
-            0%, 100% { transform: translate(0, 0); }
-            10% { transform: translate(-5%, -10%); }
-            20% { transform: translate(-15%, 5%); }
-            30% { transform: translate(7%, -25%); }
-            40% { transform: translate(-5%, 25%); }
-            50% { transform: translate(-15%, 10%); }
-            60% { transform: translate(15%, 0%); }
-            70% { transform: translate(0%, 15%); }
-            80% { transform: translate(3%, 20%); }
-            90% { transform: translate(-10%, 10%); }
         }
 
         #cursor {
@@ -67,7 +40,6 @@
 </head>
 <body>
     <div id="cursor"></div>
-    <div id="grain"></div>
 
     <!-- Three.js from CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -142,8 +114,8 @@
         function initScene() {
             // Scene
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0xffffff);
-            scene.fog = new THREE.Fog(0xffffff, CONFIG.fogNear, CONFIG.fogFar);
+            scene.background = new THREE.Color(0xB8E6F5);  // Light sky blue
+            scene.fog = new THREE.Fog(0xE0F6FF, CONFIG.fogNear, CONFIG.fogFar);  // Light blue fog
 
             // Camera
             camera = new THREE.PerspectiveCamera(
@@ -561,7 +533,7 @@
         // ============================================
         console.log('%c🎈 3D Interactive Bubbles with Depth of Field!', 'color: #667eea; font-size: 16px; font-weight: bold;');
         console.log('Config:', CONFIG);
-        console.log('✨ Features: White foggy environment, depth of field, film grain overlay');
+        console.log('✨ Features: Sky blue gradient, atmospheric fog, depth of field effect');
         console.log('🎯 Focus distance:', CONFIG.focusDistance, '| Depth of field strength:', CONFIG.depthOfFieldStrength);
         console.log('Click bubbles to pop them in 3D!');
     </script>
