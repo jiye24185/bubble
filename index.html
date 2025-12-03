@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Floating Bubbles</title>
+    <title>Interactive 3D Floating Bubbles</title>
     <style>
         * {
             margin: 0;
@@ -19,13 +19,12 @@
 
         canvas {
             display: block;
-            cursor: none;
         }
 
         #cursor {
             position: fixed;
-            width: 40px;
-            height: 40px;
+            width: 30px;
+            height: 30px;
             border: 2px solid rgba(255, 255, 255, 0.6);
             border-radius: 50%;
             pointer-events: none;
@@ -40,8 +39,10 @@
     </style>
 </head>
 <body>
-    <canvas id="bubbleCanvas"></canvas>
     <div id="cursor"></div>
+
+    <!-- Three.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <script>
         // ============================================
@@ -49,109 +50,197 @@
         // ============================================
         const CONFIG = {
             // Bubble settings
-            bubbleCount: 20,
-            minSize: 30,
-            maxSize: 120,
+            bubbleCount: 25,
+            minSize: 0.3,              // 3D size units
+            maxSize: 1.2,
 
             // Motion settings
-            driftSpeed: 0.3,           // Base floating speed
-            friction: 0.98,            // Velocity dampening (0.95 = more friction, 0.99 = less)
-            bounceStrength: 8,         // How hard bubbles bounce from mouse
-            mouseRadius: 150,          // Distance at which mouse affects bubbles
+            driftSpeed: 0.003,         // Base floating speed in 3D
+            friction: 0.98,            // Velocity dampening
+            bounceStrength: 0.08,      // How hard bubbles bounce from mouse
+            mouseRadius: 2.5,          // Distance at which mouse affects bubbles (REDUCED!)
+
+            // 3D Space boundaries
+            spaceWidth: 10,            // Width of the 3D space
+            spaceHeight: 8,            // Height of the 3D space
+            spaceDepth: 8,             // Depth of the 3D space
 
             // Animation settings
             scaleOscillation: 0.02,    // How much bubbles "breathe"
             scaleSpeed: 0.02,          // Speed of breathing animation
+            cameraAutoRotate: true,    // Gentle camera rotation
+            cameraRotateSpeed: 0.0002,
 
             // Pop animation
             popDuration: 600,          // Pop animation duration (ms)
-            popScaleMultiplier: 1.5,   // How much bubble grows when popping
-            particleCount: 8,          // Particles created on pop
+            popScaleMultiplier: 1.8,   // How much bubble grows when popping
+            particleCount: 12,         // Particles created on pop (3D particles!)
 
             // Color palette (random choice per bubble)
             colors: [
-                { h: 0, s: 0, l: 95 },      // White
-                { h: 200, s: 80, l: 85 },   // Light blue
-                { h: 280, s: 70, l: 85 },   // Light purple
-                { h: 320, s: 75, l: 80 },   // Light pink
-                { h: 190, s: 60, l: 90 },   // Very light blue
+                0xffffff,  // White
+                0xc8e5ff,  // Light blue
+                0xdac8ff,  // Light purple
+                0xffc8e8,  // Light pink
+                0xd0f0ff,  // Very light blue
+                0xffe0f0,  // Very light pink
             ],
+
+            // Material settings
+            bubbleOpacity: 0.6,
+            bubbleTransparent: true,
+            bubbleReflectivity: 0.9,
 
             // Respawn settings
             respawnDelay: 500          // Time before respawning after pop (ms)
         };
 
         // ============================================
-        // 🎯 Canvas Setup
+        // 🎯 Three.js Scene Setup
         // ============================================
-        const canvas = document.getElementById('bubbleCanvas');
-        const ctx = canvas.getContext('2d');
-        const cursorEl = document.getElementById('cursor');
+        let scene, camera, renderer, raycaster;
+        let bubbles = [];
+        let mouse3D = new THREE.Vector3(-1000, -1000, -1000);
+        let mouse2D = new THREE.Vector2();
+        let cursorEl = document.getElementById('cursor');
+        let clock = new THREE.Clock();
 
-        let width = canvas.width = window.innerWidth;
-        let height = canvas.height = window.innerHeight;
+        function initScene() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x667eea);
+            scene.fog = new THREE.Fog(0x667eea, 5, 25);
 
-        window.addEventListener('resize', () => {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
-        });
+            // Camera
+            camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000
+            );
+            camera.position.z = 8;
+            camera.position.y = 0;
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            // Raycaster for mouse interaction
+            raycaster = new THREE.Raycaster();
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight1.position.set(5, 5, 5);
+            scene.add(directionalLight1);
+
+            const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+            directionalLight2.position.set(-5, -5, -5);
+            scene.add(directionalLight2);
+
+            // Point light for extra shine
+            const pointLight = new THREE.PointLight(0xffffff, 0.5);
+            pointLight.position.set(0, 3, 5);
+            scene.add(pointLight);
+
+            // Window resize
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
 
         // ============================================
-        // 🎈 Bubble Class
+        // 🎈 3D Bubble Class
         // Structure:
-        //   - Position: x, y
-        //   - Size: baseRadius (unchanging), radius (with breathing)
-        //   - Velocity: vx, vy
-        //   - Drift: driftAngle, driftSpeed (for wandering)
-        //   - Animation: scaleOffset (for breathing effect)
-        //   - State: popping, popProgress, particles
+        //   - Position: x, y, z (3D!)
+        //   - Size: baseRadius, currentRadius
+        //   - Velocity: vx, vy, vz (3D velocity!)
+        //   - Mesh: Three.js mesh object
+        //   - Drift: for gentle wandering in 3D
+        //   - State: popping, particles
         // ============================================
-        class Bubble {
-            constructor(x, y, radius) {
-                // Position
-                this.x = x || Math.random() * width;
-                this.y = y || Math.random() * height;
+        class Bubble3D {
+            constructor(x, y, z, radius) {
+                // Position in 3D space
+                this.position = new THREE.Vector3(
+                    x !== undefined ? x : (Math.random() - 0.5) * CONFIG.spaceWidth,
+                    y !== undefined ? y : (Math.random() - 0.5) * CONFIG.spaceHeight,
+                    z !== undefined ? z : (Math.random() - 0.5) * CONFIG.spaceDepth
+                );
 
                 // Size
                 this.baseRadius = radius || (CONFIG.minSize + Math.random() * (CONFIG.maxSize - CONFIG.minSize));
-                this.radius = this.baseRadius;
+                this.currentRadius = this.baseRadius;
 
-                // Velocity for floating motion
-                this.vx = (Math.random() - 0.5) * CONFIG.driftSpeed;
-                this.vy = (Math.random() - 0.5) * CONFIG.driftSpeed;
+                // Velocity in 3D
+                this.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * CONFIG.driftSpeed,
+                    (Math.random() - 0.5) * CONFIG.driftSpeed,
+                    (Math.random() - 0.5) * CONFIG.driftSpeed
+                );
 
-                // Random drift offset (for gentle wandering)
+                // Drift for wandering
                 this.driftAngle = Math.random() * Math.PI * 2;
+                this.driftAngle2 = Math.random() * Math.PI * 2;
                 this.driftSpeed = 0.001 + Math.random() * 0.002;
 
-                // Scale oscillation (breathing effect)
+                // Animation
                 this.scaleOffset = Math.random() * Math.PI * 2;
 
                 // Color
-                const colorChoice = CONFIG.colors[Math.floor(Math.random() * CONFIG.colors.length)];
-                this.color = colorChoice;
+                const color = CONFIG.colors[Math.floor(Math.random() * CONFIG.colors.length)];
+
+                // Create 3D sphere mesh
+                const geometry = new THREE.SphereGeometry(this.baseRadius, 32, 32);
+                const material = new THREE.MeshPhysicalMaterial({
+                    color: color,
+                    transparent: CONFIG.bubbleTransparent,
+                    opacity: CONFIG.bubbleOpacity,
+                    metalness: 0.1,
+                    roughness: 0.1,
+                    reflectivity: CONFIG.bubbleReflectivity,
+                    clearcoat: 1.0,
+                    clearcoatRoughness: 0.1,
+                });
+
+                this.mesh = new THREE.Mesh(geometry, material);
+                this.mesh.position.copy(this.position);
+                this.mesh.userData.bubble = this; // Reference back to this bubble
+                scene.add(this.mesh);
 
                 // State
                 this.popping = false;
                 this.popProgress = 0;
                 this.particles = [];
+                this.color = color;
             }
 
-            // Apply gentle drift motion
+            // Apply gentle 3D drift
             drift() {
                 this.driftAngle += this.driftSpeed;
-                this.vx += Math.cos(this.driftAngle) * 0.01;
-                this.vy += Math.sin(this.driftAngle) * 0.01;
+                this.driftAngle2 += this.driftSpeed * 0.7;
+
+                this.velocity.x += Math.cos(this.driftAngle) * 0.0001;
+                this.velocity.y += Math.sin(this.driftAngle2) * 0.0001;
+                this.velocity.z += Math.cos(this.driftAngle2) * 0.0001;
             }
 
             // ============================================
-            // Mouse Interaction Logic:
-            // 1. Calculate distance from bubble to mouse
-            // 2. If within mouseRadius + radius, apply repelling force
-            // 3. Force strength decreases with distance
-            // 4. Apply force in opposite direction of mouse
+            // 3D Mouse Interaction Logic:
+            // 1. Calculate 3D distance from bubble to mouse position
+            // 2. If within mouseRadius, apply repelling force
+            // 3. Force decreases with distance
+            // 4. Apply force in 3D direction away from mouse
             // ============================================
-            update(mouseX, mouseY, mouseDown) {
+            update(mouse3DPos) {
                 if (this.popping) {
                     this.updatePop();
                     return;
@@ -160,57 +249,60 @@
                 // Gentle drift
                 this.drift();
 
-                // Mouse interaction
-                const dx = mouseX - this.x;
-                const dy = mouseY - this.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
+                // Mouse interaction in 3D space
+                const distance = this.position.distanceTo(mouse3DPos);
 
-                // Mouse force field - pushes bubbles away
-                if (distance < CONFIG.mouseRadius + this.radius) {
-                    const force = (CONFIG.mouseRadius + this.radius - distance) / CONFIG.mouseRadius;
-                    const angle = Math.atan2(dy, dx);
+                if (distance < CONFIG.mouseRadius + this.currentRadius) {
+                    const force = (CONFIG.mouseRadius + this.currentRadius - distance) / CONFIG.mouseRadius;
 
-                    // Push away from mouse (negative force)
-                    this.vx -= Math.cos(angle) * force * CONFIG.bounceStrength;
-                    this.vy -= Math.sin(angle) * force * CONFIG.bounceStrength;
+                    // Direction away from mouse
+                    const direction = new THREE.Vector3()
+                        .subVectors(this.position, mouse3DPos)
+                        .normalize();
+
+                    // Apply repelling force
+                    this.velocity.addScaledVector(direction, force * CONFIG.bounceStrength);
                 }
 
                 // Apply velocity
-                this.x += this.vx;
-                this.y += this.vy;
+                this.position.add(this.velocity);
 
-                // Friction - gradually slow down
-                this.vx *= CONFIG.friction;
-                this.vy *= CONFIG.friction;
+                // Friction
+                this.velocity.multiplyScalar(CONFIG.friction);
 
-                // Boundary bouncing with soft reflection
-                if (this.x - this.radius < 0) {
-                    this.x = this.radius;
-                    this.vx *= -0.8;
-                } else if (this.x + this.radius > width) {
-                    this.x = width - this.radius;
-                    this.vx *= -0.8;
+                // Boundary bouncing (soft walls)
+                const halfWidth = CONFIG.spaceWidth / 2;
+                const halfHeight = CONFIG.spaceHeight / 2;
+                const halfDepth = CONFIG.spaceDepth / 2;
+
+                if (Math.abs(this.position.x) > halfWidth - this.currentRadius) {
+                    this.position.x = Math.sign(this.position.x) * (halfWidth - this.currentRadius);
+                    this.velocity.x *= -0.8;
+                }
+                if (Math.abs(this.position.y) > halfHeight - this.currentRadius) {
+                    this.position.y = Math.sign(this.position.y) * (halfHeight - this.currentRadius);
+                    this.velocity.y *= -0.8;
+                }
+                if (Math.abs(this.position.z) > halfDepth - this.currentRadius) {
+                    this.position.z = Math.sign(this.position.z) * (halfDepth - this.currentRadius);
+                    this.velocity.z *= -0.8;
                 }
 
-                if (this.y - this.radius < 0) {
-                    this.y = this.radius;
-                    this.vy *= -0.8;
-                } else if (this.y + this.radius > height) {
-                    this.y = height - this.radius;
-                    this.vy *= -0.8;
-                }
-
-                // Breathing animation (subtle scale change)
+                // Breathing animation
                 this.scaleOffset += CONFIG.scaleSpeed;
                 const scaleVariation = Math.sin(this.scaleOffset) * CONFIG.scaleOscillation;
-                this.radius = this.baseRadius * (1 + scaleVariation);
+                this.currentRadius = this.baseRadius * (1 + scaleVariation);
+
+                // Update mesh
+                this.mesh.position.copy(this.position);
+                this.mesh.scale.setScalar(1 + scaleVariation);
             }
 
             // ============================================
-            // Pop Animation:
-            // 1. Set popping flag and create particles
-            // 2. Particles shoot out in all directions
-            // 3. Bubble scales up and fades out
+            // Pop Animation in 3D:
+            // 1. Create 3D particle spheres
+            // 2. Particles shoot out in all 3D directions
+            // 3. Main bubble scales up and fades
             // 4. Particles fade and slow down
             // ============================================
             pop() {
@@ -218,267 +310,214 @@
                 this.popping = true;
                 this.popProgress = 0;
 
-                // Create particles in a circle
+                // Create 3D particles in a sphere pattern
                 for (let i = 0; i < CONFIG.particleCount; i++) {
-                    const angle = (Math.PI * 2 * i) / CONFIG.particleCount;
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    const theta = Math.random() * Math.PI * 2;
+
+                    const direction = new THREE.Vector3(
+                        Math.sin(phi) * Math.cos(theta),
+                        Math.sin(phi) * Math.sin(theta),
+                        Math.cos(phi)
+                    );
+
+                    const particleGeometry = new THREE.SphereGeometry(this.baseRadius * 0.15, 8, 8);
+                    const particleMaterial = new THREE.MeshBasicMaterial({
+                        color: this.color,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+
+                    const particleMesh = new THREE.Mesh(particleGeometry, particleMaterial);
+                    particleMesh.position.copy(this.position);
+                    scene.add(particleMesh);
+
                     this.particles.push({
-                        x: this.x,
-                        y: this.y,
-                        vx: Math.cos(angle) * (2 + Math.random() * 2),
-                        vy: Math.sin(angle) * (2 + Math.random() * 2),
-                        radius: this.baseRadius * 0.15,
+                        mesh: particleMesh,
+                        velocity: direction.multiplyScalar(0.05 + Math.random() * 0.05),
                         life: 1
                     });
                 }
             }
 
-            // Update pop animation state
             updatePop() {
-                this.popProgress += 16.67 / CONFIG.popDuration; // Assuming ~60fps
+                this.popProgress += 16.67 / CONFIG.popDuration;
+
+                // Scale up and fade main bubble
+                const scale = 1 + (CONFIG.popScaleMultiplier - 1) * this.popProgress;
+                const alpha = (1 - this.popProgress) * CONFIG.bubbleOpacity;
+
+                this.mesh.scale.setScalar(scale);
+                this.mesh.material.opacity = alpha;
 
                 // Update particles
                 this.particles.forEach(p => {
-                    p.x += p.vx;
-                    p.y += p.vy;
-                    p.vx *= 0.95;
-                    p.vy *= 0.95;
+                    p.mesh.position.add(p.velocity);
+                    p.velocity.multiplyScalar(0.95);
                     p.life = 1 - this.popProgress;
+                    p.mesh.material.opacity = p.life * 0.8;
+                    p.mesh.scale.setScalar(p.life);
                 });
 
                 if (this.popProgress >= 1) {
+                    // Clean up
+                    this.particles.forEach(p => scene.remove(p.mesh));
+                    this.particles = [];
                     this.popping = false;
                     this.popProgress = 0;
-                    this.particles = [];
-                    return true; // Signal completion
+                    return true;
                 }
                 return false;
             }
 
-            // ============================================
-            // Visual Customization:
-            // - Gradient creates 3D sphere effect
-            // - Highlight adds glossy shine
-            // - Rim adds definition
-            // Modify colors and positions here!
-            // ============================================
-            draw() {
-                if (this.popping) {
-                    this.drawPop();
-                    return;
-                }
-
-                const { h, s, l } = this.color;
-
-                // Create radial gradient for 3D effect
-                const gradient = ctx.createRadialGradient(
-                    this.x - this.radius * 0.3,
-                    this.y - this.radius * 0.3,
-                    this.radius * 0.1,
-                    this.x,
-                    this.y,
-                    this.radius
-                );
-
-                gradient.addColorStop(0, `hsla(${h}, ${s}%, ${Math.min(l + 10, 100)}%, 0.9)`);
-                gradient.addColorStop(0.4, `hsla(${h}, ${s}%, ${l}%, 0.7)`);
-                gradient.addColorStop(1, `hsla(${h}, ${s}%, ${l - 10}%, 0.5)`);
-
-                // Draw bubble
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = gradient;
-                ctx.fill();
-
-                // Shine/highlight
-                const highlightGradient = ctx.createRadialGradient(
-                    this.x - this.radius * 0.4,
-                    this.y - this.radius * 0.4,
-                    0,
-                    this.x - this.radius * 0.4,
-                    this.y - this.radius * 0.4,
-                    this.radius * 0.5
-                );
-                highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
-                highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-
-                ctx.beginPath();
-                ctx.arc(this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.4, 0, Math.PI * 2);
-                ctx.fillStyle = highlightGradient;
-                ctx.fill();
-
-                // Subtle rim
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.strokeStyle = `hsla(${h}, ${s}%, ${l}%, 0.4)`;
-                ctx.lineWidth = 2;
-                ctx.stroke();
-            }
-
-            // Draw pop animation
-            drawPop() {
-                const progress = this.popProgress;
-                const scale = 1 + (CONFIG.popScaleMultiplier - 1) * progress;
-                const alpha = 1 - progress;
-                const currentRadius = this.baseRadius * scale;
-
-                const { h, s, l } = this.color;
-
-                // Draw expanding bubble
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, currentRadius, 0, Math.PI * 2);
-                ctx.fillStyle = `hsla(${h}, ${s}%, ${l}%, ${alpha * 0.5})`;
-                ctx.fill();
-
-                // Draw particles
-                this.particles.forEach(p => {
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, p.radius * p.life, 0, Math.PI * 2);
-                    ctx.fillStyle = `hsla(${h}, ${s}%, ${l}%, ${p.life * 0.8})`;
-                    ctx.fill();
-                });
-            }
-
-            // Check if point is inside bubble
-            contains(x, y) {
-                const dx = x - this.x;
-                const dy = y - this.y;
-                return Math.sqrt(dx * dx + dy * dy) < this.radius;
+            remove() {
+                scene.remove(this.mesh);
+                this.particles.forEach(p => scene.remove(p.mesh));
             }
         }
 
         // ============================================
-        // 🎮 Game State
+        // 🎮 Initialize Bubbles
         // ============================================
-        let bubbles = [];
-        let mouse = { x: -1000, y: -1000, down: false };
-        let toRespawn = [];
-
-        // Initialize bubbles
         function initBubbles() {
             bubbles = [];
             for (let i = 0; i < CONFIG.bubbleCount; i++) {
-                bubbles.push(new Bubble());
+                bubbles.push(new Bubble3D());
             }
         }
 
         // ============================================
         // 🖱️ Mouse/Touch Events
         // ============================================
-        function updateMousePosition(e) {
-            const rect = canvas.getBoundingClientRect();
-            mouse.x = e.clientX - rect.left;
-            mouse.y = e.clientY - rect.top;
+        function onMouseMove(event) {
+            // Update 2D normalized mouse position
+            mouse2D.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse2D.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-            // Update custom cursor
-            cursorEl.style.left = e.clientX + 'px';
-            cursorEl.style.top = e.clientY + 'px';
+            // Update cursor element
+            cursorEl.style.left = event.clientX + 'px';
+            cursorEl.style.top = event.clientY + 'px';
+
+            // Project mouse to 3D space
+            updateMouse3D();
         }
 
-        canvas.addEventListener('mousemove', updateMousePosition);
-        canvas.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            const touch = e.touches[0];
-            updateMousePosition(touch);
-        });
+        function updateMouse3D() {
+            // Cast ray from camera through mouse position
+            raycaster.setFromCamera(mouse2D, camera);
 
-        canvas.addEventListener('mousedown', (e) => {
-            mouse.down = true;
+            // Use a plane at z=0 for mouse interaction depth
+            const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+            const intersection = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, intersection);
+
+            if (intersection) {
+                mouse3D.copy(intersection);
+            }
+        }
+
+        function onMouseDown(event) {
             cursorEl.classList.add('active');
-            handleClick(e);
-        });
+            handleClick();
+        }
 
-        canvas.addEventListener('mouseup', () => {
-            mouse.down = false;
+        function onMouseUp() {
             cursorEl.classList.remove('active');
-        });
+        }
 
-        canvas.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            mouse.down = true;
-            const touch = e.touches[0];
-            updateMousePosition(touch);
-            handleClick(touch);
-        });
-
-        canvas.addEventListener('touchend', () => {
-            mouse.down = false;
-        });
-
-        canvas.addEventListener('mouseleave', () => {
-            mouse.x = -1000;
-            mouse.y = -1000;
-        });
+        function onMouseLeave() {
+            mouse3D.set(-1000, -1000, -1000);
+        }
 
         // ============================================
-        // 💥 Click Handler
+        // 💥 Click Handler (3D Raycasting!)
         // ============================================
-        function handleClick(e) {
-            const rect = canvas.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const clickY = e.clientY - rect.top;
+        function handleClick() {
+            raycaster.setFromCamera(mouse2D, camera);
 
-            // Find clicked bubble (check from top to bottom)
-            for (let i = bubbles.length - 1; i >= 0; i--) {
-                const bubble = bubbles[i];
-                if (!bubble.popping && bubble.contains(clickX, clickY)) {
+            // Check intersection with bubble meshes
+            const intersects = raycaster.intersectObjects(
+                bubbles.map(b => b.mesh).filter(m => m.parent !== null)
+            );
+
+            if (intersects.length > 0) {
+                const clickedMesh = intersects[0].object;
+                const bubble = clickedMesh.userData.bubble;
+
+                if (bubble && !bubble.popping) {
                     bubble.pop();
 
                     // Schedule respawn
                     setTimeout(() => {
-                        toRespawn.push(i);
+                        const index = bubbles.indexOf(bubble);
+                        if (index !== -1) {
+                            bubble.remove();
+                            bubbles[index] = new Bubble3D();
+                        }
                     }, CONFIG.respawnDelay);
-
-                    break; // Only pop one bubble per click
                 }
             }
         }
 
+        // Event listeners
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('mouseup', onMouseUp);
+        window.addEventListener('mouseleave', onMouseLeave);
+
+        // Touch events
+        window.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            onMouseMove(touch);
+        }, { passive: false });
+
+        window.addEventListener('touchstart', (e) => {
+            const touch = e.touches[0];
+            onMouseMove(touch);
+            onMouseDown(touch);
+        });
+
+        window.addEventListener('touchend', onMouseUp);
+
         // ============================================
         // 🎬 Animation Loop
-        // Uses requestAnimationFrame for smooth 60fps animation
         // ============================================
         function animate() {
-            // Clear canvas
-            ctx.clearRect(0, 0, width, height);
+            requestAnimationFrame(animate);
 
-            // Update and draw all bubbles
-            bubbles.forEach((bubble, index) => {
-                bubble.update(mouse.x, mouse.y, mouse.down);
-                bubble.draw();
+            const deltaTime = clock.getDelta();
 
-                // Check if pop animation is complete
-                if (bubble.popping && bubble.popProgress >= 1) {
-                    // Reset bubble to new position
-                    const newBubble = new Bubble();
-                    bubbles[index] = newBubble;
-                }
-            });
-
-            // Respawn bubbles
-            while (toRespawn.length > 0) {
-                const index = toRespawn.pop();
-                if (bubbles[index] && bubbles[index].popping) {
-                    // Still popping, wait more
-                    toRespawn.push(index);
-                    break;
-                }
+            // Gentle camera auto-rotation
+            if (CONFIG.cameraAutoRotate) {
+                camera.position.x = Math.sin(clock.elapsedTime * CONFIG.cameraRotateSpeed) * 8;
+                camera.position.z = Math.cos(clock.elapsedTime * CONFIG.cameraRotateSpeed) * 8;
+                camera.lookAt(0, 0, 0);
             }
 
-            requestAnimationFrame(animate);
+            // Update all bubbles
+            bubbles.forEach(bubble => {
+                bubble.update(mouse3D);
+            });
+
+            // Render
+            renderer.render(scene, camera);
         }
 
         // ============================================
         // 🚀 Start
         // ============================================
+        initScene();
         initBubbles();
         animate();
 
         // ============================================
         // 📝 Debug info
         // ============================================
-        console.log('%c🎈 Interactive Bubbles Loaded!', 'color: #667eea; font-size: 16px; font-weight: bold;');
+        console.log('%c🎈 3D Interactive Bubbles Loaded!', 'color: #667eea; font-size: 16px; font-weight: bold;');
         console.log('Config:', CONFIG);
-        console.log('Click bubbles to pop them!');
+        console.log('Click bubbles to pop them in 3D!');
+        console.log('Mouse interaction radius (smaller now):', CONFIG.mouseRadius);
     </script>
 </body>
 </html>
